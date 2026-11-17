@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniaStudio</title>
+  <meta name="description" content="Crée tes miniatures YouTube dans la DA de ta chaîne avec Gemini. Plus tu notes, plus il apprend ton style.">
+  <meta property="og:title" content="MiniaStudio">
+  <meta property="og:description" content="Tes miniatures YouTube en automatique, dans ta direction artistique.">
+  <meta name="theme-color" content="#0e0e12">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/fonts.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">▶</span> MiniaStudio</div>
+    <nav class="tabs" id="tabs">
+      <button data-view="create" class="active">✨ Créer</button>
+      <button data-view="gallery">🖼️ Galerie</button>
+      <button data-view="da">🎨 Ma DA</button>
+      <button data-view="settings">⚙️ Réglages</button>
+    </nav>
+    <button class="da-badge" id="da-badge" data-view="da" title="Ce que le site a appris de ta chaîne"></button>
+  </header>
+
+  <main>
+    <section id="view-create" class="view active"></section>
+    <section id="view-gallery" class="view"></section>
+    <section id="view-da" class="view"></section>
+    <section id="view-settings" class="view"></section>
+  </main>
+
+  <!-- Éditeur de miniature -->
+  <div class="modal" id="editor" hidden>
+    <div class="editor">
+      <div class="editor-head">
+        <div class="editor-title" id="ed-title"></div>
+        <div class="editor-actions">
+          <button class="btn ghost" data-ed="preview">👀 Aperçu YouTube</button>
+          <button class="btn ghost" data-ed="download">⬇️ Télécharger</button>
+          <button class="btn primary" data-ed="final">✅ C'est la bonne !</button>
+          <button class="btn icon" data-ed="close" title="Fermer (Échap)">✕</button>
+        </div>
+      </div>
+      <div class="editor-body">
+        <div class="editor-stage">
+          <canvas id="ed-canvas" width="1280" height="720"></canvas>
+          <div class="stage-hints">Glisse les textes pour les déplacer · Double-clic pour modifier · Glisse le fond pour le recadrer (avec le zoom)</div>
+        </div>
+        <aside class="editor-panel" id="ed-panel"></aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aperçu façon YouTube -->
+  <div class="modal" id="preview" hidden>
+    <div class="preview-box">
+      <div class="preview-head">
+        <strong>Aperçu comme sur YouTube</strong>
+        <div>
+          <button class="btn ghost small" id="pv-theme">☀️ Thème clair</button>
+          <button class="btn icon" id="pv-close">✕</button>
+        </div>
+      </div>
+      <div class="yt" id="pv-content"></div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
