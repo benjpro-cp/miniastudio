@@ -21,6 +21,18 @@ Tu peux tout essayer **sans clé** : le site démarre en mode démo (fausses ima
 
 ---
 
+## 📁 Un dossier par type de vidéo
+
+Tu fais des vidéos GTA, des vidéos sur les films, sur l'histoire… ? Crée **un dossier par type de vidéo**, avec le menu 📁 en haut ou le bouton « ＋ Nouveau » de l'écran Créer.
+
+- Chaque dossier a **ses propres miniatures de référence, sa propre DA et son propre apprentissage** : une miniature GTA ne ressemble pas à une miniature Histoire.
+- Ton visage est commun à tous les dossiers.
+- Pour créer une miniature GTA, choisis le dossier « GTA » (puce en haut du formulaire), puis écris ton titre.
+- En créant un dossier, tu peux reprendre la DA d'un autre dossier comme point de départ.
+- Tes anciennes données sont rangées dans le dossier « Général ». Tu peux le renommer avec ✏️.
+
+---
+
 ## Gemini gratuit : comment ça marche
 
 | Façon d'utiliser Gemini | Cerveau (analyse + idées) | Images |

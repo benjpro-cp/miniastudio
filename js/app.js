@@ -27,12 +27,18 @@ const S = {
   galleryLimit: 60,
   polling: null,
   models: {},
+  resultsByFolder: {},
 };
 const D = () => S.data;
 const genById = (id) => D().generations.find((g) => g.id === id);
 const providerLabel = (p) => D().info.providers[p]?.label || p;
 
+const currentFolder = () => (D().folders || []).find((f) => f.id === D().activeFolder) || null;
+const folderName = (id) => (D().folders || []).find((f) => f.id === id)?.name || '';
+
 function upsertGen(g) {
+  // Une image créée pour un autre dossier n'apparaît pas dans le dossier ouvert.
+  if (g.folderId && D().activeFolder && g.folderId !== D().activeFolder) return;
   const list = D().generations;
   const i = list.findIndex((x) => x.id === g.id);
   if (i >= 0) list[i] = g; else list.unshift(g);
@@ -143,6 +149,7 @@ function updateBadge() {
 async function refresh() {
   S.data = await api.get('/api/state');
   updateBadge();
+  renderFolderBar();
   renderView(S.view);
 }
 
@@ -179,7 +186,8 @@ function startPolling() {
         S.lastDone = last.at;
         if (last.ok) {
           const lines = (last.changelog || []).slice(0, 4).map((l) => `• ${l}`).join('\n');
-          toast(`${last.kind === 'learn' ? '🧠 J\'ai mis à jour ta DA' : '🎨 Ta DA est prête'} (v${last.version}) !${lines ? `\n${lines}` : ''}`, 'ok', 9000);
+          const fname = last.folderName ? ` « ${last.folderName} »` : '';
+          toast(`${last.kind === 'learn' ? `🧠 J'ai mis à jour la DA${fname}` : `🎨 La DA${fname} est prête`} (v${last.version}) !${lines ? `\n${lines}` : ''}`, 'ok', 9000);
         } else toast(last.error, 'err', 10000);
       }
     } catch (_) {
@@ -214,6 +222,8 @@ function renderCreate() {
       <div class="create-layout">
         <form class="panel" id="create-form" autocomplete="off">
           <h2>Nouvelle miniature</h2>
+          <div class="field-label">Pour quel type de vidéo ?</div>
+          <div class="folder-chips" id="folder-chips"></div>
           <label>Titre de la vidéo *
             <input name="title" maxlength="200" placeholder="Ex : J'ai testé le pire hôtel de Paris"></label>
           <label>Ce qui se passe dans la vidéo <span class="hint">(facultatif, mais ça aide beaucoup)</span>
@@ -273,6 +283,7 @@ function renderCreate() {
     });
     renderResults();
   }
+  renderFolderChips();
   updateOnboarding();
   updateCostHint();
   const fh = $('#face-hint');
@@ -350,7 +361,7 @@ async function onCreate(e) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> L\'IA cherche des idées…';
   try {
-    const { concepts } = await api.post('/api/concepts', form);
+    const { concepts } = await api.post('/api/concepts', { ...form, folderId: D().activeFolder });
     if (form.review) {
       S.concepts = concepts.map((c) => ({ ...c, on: true }));
       S.conceptInput = form;
@@ -421,7 +432,8 @@ async function runLimited(items, limit, fn) {
 
 function generateFromConcepts(concepts, form) {
   const input = { title: form.title, idea: form.idea, constraints: form.constraints, useFace: form.useFace, textMode: form.textMode };
-  const batch = concepts.map((c) => ({ key: uid(), concept: c, input, status: 'pending' }));
+  const folderId = D().activeFolder;
+  const batch = concepts.map((c) => ({ key: uid(), concept: c, input, status: 'pending', folderId }));
   S.results = [...batch, ...S.results].slice(0, 30);
   renderResults();
   $('#results-head').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -435,7 +447,7 @@ async function runTask(r) {
   try {
     const { generation } = r.editOf
       ? await api.post(`/api/generations/${r.editOf}/edit`, { instruction: r.concept.instruction })
-      : await api.post('/api/generate', { input: r.input, concept: r.concept, parentId: r.parentId || null });
+      : await api.post('/api/generate', { input: r.input, concept: r.concept, parentId: r.parentId || null, folderId: r.folderId || D().activeFolder });
     upsertGen(generation);
     r.genId = generation.id;
     r.status = 'done';
@@ -550,12 +562,12 @@ async function onResultClick(e) {
     const input = $('[data-retouch]', card);
     const instruction = input.value.trim();
     if (!instruction) { input.focus(); return; }
-    const nr = { key: uid(), concept: { ...g.concept, instruction }, input: g.input, status: 'pending', editOf: g.id };
+    const nr = { key: uid(), concept: { ...g.concept, instruction }, input: g.input, status: 'pending', editOf: g.id, folderId: g.folderId };
     insertResultAfter(r, nr);
     runTask(nr);
   } else if (act === 'variant') {
     const { instruction, ...concept } = r.concept || g.concept;
-    const nr = { key: uid(), concept, input: r.input || g.input, status: 'pending', parentId: g.id };
+    const nr = { key: uid(), concept, input: r.input || g.input, status: 'pending', parentId: g.id, folderId: g.folderId };
     insertResultAfter(r, nr);
     runTask(nr);
   }
@@ -742,8 +754,8 @@ function renderDA() {
     <div class="panel">
       <div class="row tight">
         <div style="flex:1 1 360px">
-          <h2 style="margin:0">🎨 Ta direction artistique</h2>
-          <p class="muted" style="margin:4px 0 0">Ce que le site a compris du style de ta chaîne. Il s'en sert pour chaque miniature et l'affine à chaque note que tu donnes.</p>
+          <h2 style="margin:0">🎨 DA du dossier « ${esc(currentFolder()?.name || '')} » <button class="btn small ghost" data-da="edit-folder" title="Renommer, décrire ou supprimer ce dossier">✏️</button></h2>
+          <p class="muted" style="margin:4px 0 0">${currentFolder()?.description ? `${esc(currentFolder().description)}. ` : ''}Ce que le site a compris du style de ces vidéos. Chaque dossier a ses propres références, sa DA et son apprentissage ; ton visage est commun à tous.</p>
         </div>
         <button class="btn primary" data-da="analyze" ${st.running ? 'disabled' : ''}>🔍 ${da ? 'Ré-analyser mes références' : 'Analyser ma DA'}</button>
         <button class="btn" data-da="learn" ${st.running ? 'disabled' : ''}>🧠 Apprendre de mes notes</button>
@@ -881,7 +893,7 @@ function drawTypoPreview() {
 
 async function saveDA(da, msg = 'DA enregistrée ✓') {
   try {
-    await api.post('/api/da', { da });
+    await api.post('/api/da', { da, folderId: D().activeFolder });
     toast(msg, 'ok');
     await refresh();
   } catch (e) { toast(e.message, 'err'); }
@@ -895,12 +907,13 @@ async function addRefFiles(files, kind) {
   const list = [...files].filter((f) => /^image\//.test(f.type));
   if (!list.length) return;
   let ok = 0;
-  toast(`Ajout de ${list.length} image(s)…`, 'info', 2500);
+  const folderId = D().activeFolder;
+  toast(`Ajout de ${list.length} image(s) dans « ${folderName(folderId)} »…`, 'info', 2500);
   for (const f of list) {
     try {
       const img = await fileToImage(f);
-      const { ref } = await api.post('/api/refs', { ...prepareThumbnail(img), kind });
-      D().refs.push(ref);
+      const { ref } = await api.post('/api/refs', { ...prepareThumbnail(img), kind, folderId });
+      if (D().activeFolder === folderId) D().refs.push(ref);
       ok++;
     } catch (e) { toast(`${f.name} : ${e.message}`, 'err'); }
   }
@@ -925,6 +938,7 @@ async function importYouTube(btn) {
   const links = $('[data-yt]').value.trim();
   if (!links) { toast('Colle au moins un lien YouTube', 'err'); return; }
   const kind = currentRefKind();
+  const folderId = D().activeFolder;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Récupération…';
   try {
@@ -935,8 +949,8 @@ async function importYouTube(btn) {
       const it = items[i];
       try {
         const img = await loadImage(it.dataUrl);
-        const res = await api.post('/api/refs', { ...prepareThumbnail(img), kind, title: it.title, source: `yt:${it.videoId}` });
-        if (!res.duplicate) { D().refs.push(res.ref); added++; }
+        const res = await api.post('/api/refs', { ...prepareThumbnail(img), kind, title: it.title, source: `yt:${it.videoId}`, folderId });
+        if (!res.duplicate) { if (D().activeFolder === folderId) D().refs.push(res.ref); added++; }
       } catch (e) { errors.push(`${it.title || it.videoId} : ${e.message}`); }
     }
     toast(`${added} miniature(s) importée(s) ✓${errors.length ? `\n⚠️ ${errors.slice(0, 3).join('\n')}` : ''}`, errors.length && !added ? 'err' : 'ok', 8000);
@@ -986,13 +1000,13 @@ function bindDA(root) {
     const act = b.dataset.da;
     try {
       if (act === 'analyze') {
-        await api.post('/api/da/analyze', {});
+        await api.post('/api/da/analyze', { folderId: D().activeFolder });
         D().status = { ...D().status, running: true, progress: 'Démarrage de l\'analyse…' };
         renderDA();
         updateBadge();
         startPolling();
       } else if (act === 'learn') {
-        await api.post('/api/learn', {});
+        await api.post('/api/learn', { folderId: D().activeFolder });
         D().status = { ...D().status, running: true, progress: 'J\'apprends de tes notes…' };
         renderDA();
         updateBadge();
@@ -1025,11 +1039,13 @@ function bindDA(root) {
         }
         await saveDA(da, act === 'add-learned' ? 'Règle ajoutée ✓' : 'Règle oubliée ✓');
       } else if (act === 'restore') {
-        await api.post('/api/da/restore', { version: Number(b.dataset.v) });
+        await api.post('/api/da/restore', { version: Number(b.dataset.v), folderId: D().activeFolder });
         toast(`Version ${b.dataset.v} restaurée ✓`, 'ok');
         await refresh();
       } else if (act === 'yt-import') {
         importYouTube(b);
+      } else if (act === 'edit-folder') {
+        openFolderModal('edit', currentFolder());
       }
     } catch (err) { toast(err.message, 'err', 8000); }
   };
@@ -1377,6 +1393,131 @@ const editor = new Editor({
 });
 
 // ==================================================================
+// DOSSIERS (GTA, films, histoire…) : chacun a ses références, sa DA et son apprentissage
+// ==================================================================
+function recentResults() {
+  return D().generations
+    .filter((g) => Date.now() - new Date(g.createdAt).getTime() < 3 * 3600e3)
+    .slice(0, 8)
+    .map((g) => ({ key: uid(), concept: g.concept, input: g.input, status: 'done', genId: g.id, folderId: g.folderId }));
+}
+
+function renderFolderBar() {
+  const bar = $('#folder-bar');
+  if (!bar || !D().folders) return;
+  bar.innerHTML = `
+    <label class="folder-pick" title="Dossier de miniatures">📁
+      <select id="folder-select" aria-label="Dossier">
+        ${D().folders.map((f) => `<option value="${f.id}" ${f.id === D().activeFolder ? 'selected' : ''}>${esc(f.name)}</option>`).join('')}
+        <option value="__new">＋ Nouveau dossier…</option>
+      </select>
+    </label>
+    <button class="btn icon small ghost" id="folder-edit" title="Renommer, décrire ou supprimer ce dossier">✏️</button>`;
+  $('#folder-select').onchange = (e) => {
+    const v = e.target.value;
+    if (v === '__new') { e.target.value = D().activeFolder; openFolderModal('create'); } else switchFolder(v);
+  };
+  $('#folder-edit').onclick = () => openFolderModal('edit', currentFolder());
+  renderFolderChips();
+}
+
+function renderFolderChips() {
+  const el = $('#folder-chips');
+  if (!el || !D().folders) return;
+  el.innerHTML = D().folders.map((f) => `<button type="button" class="chip folder-chip ${f.id === D().activeFolder ? 'on' : ''}" data-folder="${f.id}" title="${esc(f.description || f.name)}">📁 ${esc(f.name)}</button>`).join('')
+    + '<button type="button" class="chip folder-chip" data-folder="__new" title="Créer un dossier (ex : GTA, Films…)">＋ Nouveau</button>';
+  el.onclick = (e) => {
+    const b = e.target.closest('[data-folder]');
+    if (!b) return;
+    if (b.dataset.folder === '__new') openFolderModal('create'); else switchFolder(b.dataset.folder);
+  };
+}
+
+async function switchFolder(id) {
+  if (!id || id === D().activeFolder) return;
+  S.resultsByFolder[D().activeFolder] = S.results;
+  try {
+    await api.post(`/api/folders/${id}/activate`, {});
+    S.data = await api.get('/api/state');
+  } catch (e) { toast(e.message, 'err'); return; }
+  S.results = S.resultsByFolder[id] || recentResults();
+  S.concepts = [];
+  updateBadge();
+  renderFolderBar();
+  renderView(S.view);
+  if ($('#results')) { renderResults(); renderConcepts(); }
+}
+
+function openFolderModal(mode, folder = null) {
+  const m = $('#folder-modal');
+  const f = $('#folder-form');
+  m.dataset.mode = mode;
+  m.dataset.id = folder?.id || '';
+  $('#fm-title').textContent = mode === 'create' ? 'Nouveau dossier' : `Modifier « ${folder?.name || ''} »`;
+  $('#fm-submit').textContent = mode === 'create' ? 'Créer le dossier' : 'Enregistrer';
+  f.name.value = mode === 'create' ? '' : folder?.name || '';
+  f.description.value = mode === 'create' ? '' : folder?.description || '';
+  const withDA = (D().folders || []).filter((x) => x.hasDA);
+  $('#fm-copy-wrap').hidden = mode !== 'create' || !withDA.length;
+  f.copyFrom.innerHTML = '<option value="">Non, une DA toute neuve</option>' + withDA.map((x) => `<option value="${x.id}">Oui, celle de « ${esc(x.name)} »</option>`).join('');
+  $('#fm-delete').hidden = mode !== 'edit' || (D().folders || []).length <= 1;
+  m.hidden = false;
+  setTimeout(() => f.name.focus(), 30);
+}
+
+function closeFolderModal() { $('#folder-modal').hidden = true; }
+
+function bindFolderModal() {
+  const m = $('#folder-modal');
+  const f = $('#folder-form');
+  $('#fm-cancel').onclick = closeFolderModal;
+  m.addEventListener('click', (e) => { if (e.target === m) closeFolderModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !m.hidden) closeFolderModal(); });
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const name = f.name.value.trim();
+    if (!name) { f.name.focus(); return; }
+    try {
+      if (m.dataset.mode === 'create') {
+        S.resultsByFolder[D().activeFolder] = S.results;
+        await api.post('/api/folders', { name, description: f.description.value.trim(), copyFrom: f.copyFrom.value || null });
+        S.data = await api.get('/api/state');
+        S.results = [];
+        S.concepts = [];
+        closeFolderModal();
+        updateBadge();
+        renderFolderBar();
+        if ($('#results')) { renderResults(); renderConcepts(); }
+        showView('da');
+        toast(`📁 Dossier « ${name} » créé. Ajoute ses miniatures de référence, puis analyse sa DA.`, 'ok', 7000);
+      } else {
+        await api.patch(`/api/folders/${m.dataset.id}`, { name, description: f.description.value.trim() });
+        closeFolderModal();
+        await refresh();
+        toast('Dossier mis à jour ✓', 'ok');
+      }
+    } catch (err) { toast(err.message, 'err'); }
+  };
+  $('#fm-delete').onclick = async () => {
+    const id = m.dataset.id;
+    const name = folderName(id);
+    if (!window.confirm(`Supprimer le dossier « ${name} » avec ses références, sa DA et ses miniatures ? C'est définitif.`)) return;
+    try {
+      await api.del(`/api/folders/${id}`);
+      delete S.resultsByFolder[id];
+      S.data = await api.get('/api/state');
+      S.results = S.resultsByFolder[D().activeFolder] || recentResults();
+      closeFolderModal();
+      updateBadge();
+      renderFolderBar();
+      renderView(S.view);
+      if ($('#results')) { renderResults(); renderConcepts(); }
+      toast(`Dossier « ${name} » supprimé.`, 'ok');
+    } catch (err) { toast(err.message, 'err'); }
+  };
+}
+
+// ==================================================================
 // DÉMARRAGE
 // ==================================================================
 async function boot() {
@@ -1388,9 +1529,10 @@ async function boot() {
     return;
   }
   // On remet les dernières propositions (moins de 3 h) dans l'écran Créer.
-  const recent = D().generations.filter((g) => Date.now() - new Date(g.createdAt).getTime() < 3 * 3600e3).slice(0, 8);
-  S.results = recent.map((g) => ({ key: uid(), concept: g.concept, input: g.input, status: 'done', genId: g.id }));
+  S.results = recentResults();
   updateBadge();
+  renderFolderBar();
+  bindFolderModal();
   renderCreate();
   bindPreview();
   document.addEventListener('click', (e) => {

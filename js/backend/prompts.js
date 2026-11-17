@@ -35,6 +35,7 @@ function channelBlock(channel) {
   const c = channel || {};
   const lines = [];
   if (c.name) lines.push(`Nom : ${c.name}`);
+  if (c.series) lines.push(`Série de vidéos concernée (dossier) : ${c.series} — la DA ci-dessous est celle de CETTE série`);
   if (c.niche) lines.push(`Thème / niche : ${c.niche}`);
   if (c.audience) lines.push(`Public cible : ${c.audience}`);
   if (c.tone) lines.push(`Ton / ambiance voulue : ${c.tone}`);

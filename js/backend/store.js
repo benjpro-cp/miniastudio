@@ -14,17 +14,61 @@ export const DEFAULT_CONFIG = {
   learnEvery: 5,
 };
 
-const DEFAULT_DB = {
-  schema: 1,
+export const DEFAULT_DB = {
+  schema: 2,
   channel: { name: '', niche: '', audience: '', tone: '' },
-  da: null,
-  daVersion: 0,
-  daHistory: [],
+  folders: [],
+  activeFolder: null,
   refs: [],
   faces: [],
   generations: [],
-  stats: { feedbackSinceLearn: 0, totalFeedback: 0, imagesGenerated: 0, costUsd: 0, monthly: {}, lastLearnAt: null },
+  stats: { imagesGenerated: 0, costUsd: 0, monthly: {} },
 };
+
+export function newFolder(name, description = '', from = null) {
+  return {
+    id: uid('d'),
+    name: String(name || 'Nouveau dossier').trim().slice(0, 60) || 'Nouveau dossier',
+    description: String(description || '').trim().slice(0, 400),
+    createdAt: new Date().toISOString(),
+    da: from?.da ? JSON.parse(JSON.stringify(from.da)) : null,
+    daVersion: from?.da ? 1 : 0,
+    daHistory: from?.da ? [{ version: 1, at: new Date().toISOString(), reason: `Copiée depuis « ${from.name} »`, changelog: [], da: JSON.parse(JSON.stringify(from.da)) }] : [],
+    stats: { feedbackSinceLearn: 0, totalFeedback: 0, lastLearnAt: null },
+  };
+}
+
+// Passage aux dossiers : l'ancienne DA unique devient le dossier « Général » (rien n'est perdu).
+export function migrate(d) {
+  if (!Array.isArray(d.folders)) d.folders = [];
+  if (!d.folders.length) {
+    const f = newFolder('Général');
+    f.da = d.da || null;
+    f.daVersion = d.daVersion || 0;
+    f.daHistory = Array.isArray(d.daHistory) ? d.daHistory : [];
+    f.stats = {
+      feedbackSinceLearn: d.stats?.feedbackSinceLearn || 0,
+      totalFeedback: d.stats?.totalFeedback || 0,
+      lastLearnAt: d.stats?.lastLearnAt || null,
+    };
+    d.folders.push(f);
+  }
+  delete d.da;
+  delete d.daVersion;
+  delete d.daHistory;
+  if (d.stats) { delete d.stats.feedbackSinceLearn; delete d.stats.totalFeedback; delete d.stats.lastLearnAt; }
+  for (const f of d.folders) {
+    f.daHistory = Array.isArray(f.daHistory) ? f.daHistory : [];
+    f.stats = { feedbackSinceLearn: 0, totalFeedback: 0, lastLearnAt: null, ...(f.stats || {}) };
+  }
+  const ids = new Set(d.folders.map((f) => f.id));
+  const first = d.folders[0].id;
+  for (const r of d.refs || []) if (!ids.has(r.folderId)) r.folderId = first;
+  for (const g of d.generations || []) if (!ids.has(g.folderId)) g.folderId = first;
+  if (!ids.has(d.activeFolder)) d.activeFolder = first;
+  d.schema = 2;
+  return d;
+}
 
 let idb = null;
 export let db = null;
@@ -76,8 +120,9 @@ export async function init() {
     throw new Error(`Ton navigateur bloque le stockage local (navigation privée ?). ${e.message || ''}`.trim());
   }
   const [savedDb, savedConfig] = await Promise.all([run('kv', 'readonly', (s) => s.get('db')), run('kv', 'readonly', (s) => s.get('config'))]);
-  db = deepMerge(clone(DEFAULT_DB), savedDb || {});
+  db = migrate(deepMerge(clone(DEFAULT_DB), savedDb || {}));
   config = deepMerge(clone(DEFAULT_CONFIG), savedConfig || {});
+  if (savedDb?.schema !== 2) saveDb();
   // Liens internes (blob:) vers toutes les images enregistrées.
   await new Promise((resolve, reject) => {
     const t = idb.transaction('files', 'readonly');

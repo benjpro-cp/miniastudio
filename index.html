@@ -21,7 +21,8 @@
       <button data-view="da">🎨 Ma DA</button>
       <button data-view="settings">⚙️ Réglages</button>
     </nav>
-    <button class="da-badge" id="da-badge" data-view="da" title="Ce que le site a appris de ta chaîne"></button>
+    <div class="folder-bar" id="folder-bar"></div>
+    <button class="da-badge" id="da-badge" data-view="da" title="Ce que le site a appris de ce dossier"></button>
   </header>
 
   <main>
@@ -65,6 +66,26 @@
       </div>
       <div class="yt" id="pv-content"></div>
     </div>
+  </div>
+
+  <!-- Créer / modifier un dossier -->
+  <div class="modal" id="folder-modal" hidden>
+    <form class="folder-box" id="folder-form" autocomplete="off">
+      <h2 id="fm-title">Nouveau dossier</h2>
+      <p class="muted small">Un dossier par type de vidéo (GTA, films, histoire…) : chacun a ses miniatures de référence, sa DA et son apprentissage. Ton visage est commun à tous.</p>
+      <label>Nom du dossier
+        <input name="name" maxlength="60" placeholder="Ex : GTA, Films, Histoire…" required></label>
+      <label>De quoi parlent ces vidéos ? <span class="hint">(facultatif, ça aide l'IA)</span>
+        <textarea name="description" rows="2" maxlength="400" placeholder="Ex : GTA 6, actus, défis et moments fous en ligne"></textarea></label>
+      <label id="fm-copy-wrap">Reprendre une DA existante pour démarrer ?
+        <select name="copyFrom"></select></label>
+      <div class="row tight mt">
+        <button type="button" class="btn ghost danger" id="fm-delete">🗑️ Supprimer ce dossier</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" id="fm-cancel">Annuler</button>
+        <button type="submit" class="btn primary" id="fm-submit">Créer le dossier</button>
+      </div>
+    </form>
   </div>
 
   <div id="toasts"></div>

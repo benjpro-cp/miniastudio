@@ -42,17 +42,36 @@ function maskedConfig() {
   return { ...c, keys };
 }
 
+// ---------------- Dossiers (GTA, films, histoire…) ----------------
+function folderById(id) {
+  return db().folders.find((f) => f.id === id) || null;
+}
+function activeFolder() {
+  return folderById(db().activeFolder) || db().folders[0];
+}
+// Dossier demandé explicitement par l'interface, sinon le dossier actif.
+function folderFor(b) {
+  return folderById(b?.folderId) || activeFolder();
+}
+
 function publicState() {
   const d = db();
+  const f = activeFolder();
   return {
     channel: d.channel,
-    da: d.da,
-    daVersion: d.daVersion,
-    daHistory: d.daHistory.map(({ version, at, reason, changelog }) => ({ version, at, reason, changelog })),
-    refs: d.refs,
+    folders: d.folders.map((x) => ({
+      id: x.id, name: x.name, description: x.description, hasDA: !!x.da,
+      refs: d.refs.filter((r) => r.folderId === x.id).length,
+      generations: d.generations.filter((g) => g.folderId === x.id).length,
+    })),
+    activeFolder: f.id,
+    da: f.da,
+    daVersion: f.daVersion || 0,
+    daHistory: (f.daHistory || []).map(({ version, at, reason, changelog }) => ({ version, at, reason, changelog })),
+    refs: learn.folderRefs(f),
     faces: d.faces,
-    generations: d.generations,
-    stats: d.stats,
+    generations: learn.folderGens(f),
+    stats: { ...d.stats, ...f.stats },
     config: maskedConfig(),
     info: providers.publicInfo(),
     status: learn.status,
@@ -94,7 +113,7 @@ function normConcept(c = {}) {
   };
 }
 
-async function gatherRefs(useFace) {
+async function gatherRefs(useFace, folder) {
   const d = db();
   const out = [];
   if (useFace) {
@@ -104,7 +123,7 @@ async function gatherRefs(useFace) {
   }
   const maxStyle = clamp(store.config.image.maxRefs, 0, 4);
   if (maxStyle > 0) {
-    const ordered = [...d.refs].sort((a, b) => (b.pinned - a.pinned)
+    const ordered = learn.folderRefs(folder).sort((a, b) => (b.pinned - a.pinned)
       || ((b.kind === 'mine') - (a.kind === 'mine'))
       || ((b.analysis?.note || 0) - (a.analysis?.note || 0)));
     for (const r of ordered.slice(0, maxStyle)) {
@@ -116,14 +135,64 @@ async function gatherRefs(useFace) {
 
 function countFeedback(g) {
   if (g.counted) return;
+  const f = folderById(g.folderId);
+  if (!f) return;
   g.counted = true;
-  db().stats.totalFeedback = (db().stats.totalFeedback || 0) + 1;
-  db().stats.feedbackSinceLearn = (db().stats.feedbackSinceLearn || 0) + 1;
+  f.stats.totalFeedback = (f.stats.totalFeedback || 0) + 1;
+  f.stats.feedbackSinceLearn = (f.stats.feedbackSinceLearn || 0) + 1;
 }
 
 // ---------------- Routes ----------------
 route('GET', '/api/state', async () => publicState());
 route('GET', '/api/status', async () => learn.status);
+
+route('POST', '/api/folders', async (b) => {
+  const name = str(b.name, 60);
+  if (!name) throw httpError(400, 'Donne un nom au dossier (ex : GTA).');
+  if (db().folders.some((f) => f.name.toLowerCase() === name.toLowerCase())) throw httpError(400, `Le dossier « ${name} » existe déjà.`);
+  const f = store.newFolder(name, str(b.description, 400), folderById(b.copyFrom));
+  db().folders.push(f);
+  db().activeFolder = f.id;
+  store.saveDb();
+  return { folder: { id: f.id, name: f.name } };
+});
+
+route('PATCH', '/api/folders/:id', async (b, { id }) => {
+  const f = folderById(id);
+  if (!f) throw httpError(404, 'Dossier introuvable.');
+  if (typeof b.name === 'string') {
+    const name = str(b.name, 60);
+    if (!name) throw httpError(400, 'Le nom ne peut pas être vide.');
+    if (db().folders.some((x) => x.id !== id && x.name.toLowerCase() === name.toLowerCase())) throw httpError(400, `Le dossier « ${name} » existe déjà.`);
+    f.name = name;
+  }
+  if (typeof b.description === 'string') f.description = str(b.description, 400);
+  store.saveDb();
+  return { ok: true };
+});
+
+route('POST', '/api/folders/:id/activate', async (b, { id }) => {
+  if (!folderById(id)) throw httpError(404, 'Dossier introuvable.');
+  db().activeFolder = id;
+  store.saveDb();
+  return { ok: true };
+});
+
+route('DELETE', '/api/folders/:id', async (b, { id }) => {
+  const d = db();
+  const f = folderById(id);
+  if (!f) throw httpError(404, 'Dossier introuvable.');
+  if (d.folders.length <= 1) throw httpError(400, 'Garde au moins un dossier.');
+  if (learn.status.running && learn.status.folderId === id) throw httpError(409, 'Ce dossier est en train d\'apprendre, réessaie dans un instant.');
+  for (const r of learn.folderRefs(f)) { await store.removeFile('refs', r.file); if (r.thumb) await store.removeFile('thumbs', r.thumb); }
+  for (const g of learn.folderGens(f)) { await store.removeFile('gens', g.file); if (g.thumb) await store.removeFile('thumbs', g.thumb); if (g.exportFile) await store.removeFile('exports', g.exportFile); }
+  d.refs = d.refs.filter((r) => r.folderId !== id);
+  d.generations = d.generations.filter((g) => g.folderId !== id);
+  d.folders = d.folders.filter((x) => x.id !== id);
+  if (d.activeFolder === id) d.activeFolder = d.folders[0].id;
+  store.saveDb();
+  return { ok: true };
+});
 
 route('POST', '/api/settings', async (b) => {
   const c = store.config;
@@ -171,15 +240,17 @@ route('POST', '/api/channel', async (b) => {
 
 // --- Références ---
 route('POST', '/api/refs', async (b) => {
+  const folder = folderFor(b);
   const source = str(b.source, 300);
   if (source) {
-    const dup = db().refs.find((r) => r.source === source);
+    const dup = db().refs.find((r) => r.source === source && r.folderId === folder.id);
     if (dup) return { ref: dup, duplicate: true };
   }
   const img = parseDataUrl(b.dataUrl);
   const th = b.thumbDataUrl ? parseDataUrl(b.thumbDataUrl) : null;
   const ref = {
     id: uid('r'),
+    folderId: folder.id,
     file: await store.saveImage('refs', img.blob, img.mime, 'r'),
     thumb: th ? await store.saveImage('thumbs', th.blob, th.mime, 'rt') : null,
     kind: b.kind === 'inspiration' ? 'inspiration' : 'mine',
@@ -246,10 +317,11 @@ route('DELETE', '/api/faces/:id', async (b, { id }) => {
 
 // --- Direction artistique ---
 route('POST', '/api/da/analyze', async (b) => {
-  if (!db().refs.length) throw httpError(400, 'Ajoute d\'abord quelques miniatures de référence (idéalement 5 à 15 de ta chaîne).');
-  const started = learn.runInBackground('analyze', async () => {
-    if (b.force) await learn.analyzeRefs(true);
-    return learn.synthesize('Analyse de tes références');
+  const folder = folderFor(b);
+  if (!learn.folderRefs(folder).length) throw httpError(400, `Ajoute d'abord quelques miniatures de référence dans « ${folder.name} » (idéalement 5 à 15).`);
+  const started = learn.runInBackground('analyze', folder, async () => {
+    if (b.force) await learn.analyzeRefs(folder, true);
+    return learn.synthesize(folder, 'Analyse de tes références');
   });
   if (!started) throw httpError(409, 'Une analyse est déjà en cours, patiente quelques secondes.');
   return { started };
@@ -257,13 +329,14 @@ route('POST', '/api/da/analyze', async (b) => {
 
 route('POST', '/api/da', async (b) => {
   if (!b.da || typeof b.da !== 'object') throw httpError(400, 'DA invalide.');
-  return learn.commitDA(b.da, 'Modifiée à la main', ['Modifications manuelles']);
+  return learn.commitDA(folderFor(b), b.da, 'Modifiée à la main', ['Modifications manuelles']);
 });
 
-route('POST', '/api/da/restore', async (b) => learn.restore(b.version));
+route('POST', '/api/da/restore', async (b) => learn.restore(folderFor(b), b.version));
 
-route('POST', '/api/learn', async () => {
-  const started = learn.runInBackground('learn', learn.learnFromFeedback);
+route('POST', '/api/learn', async (b) => {
+  const folder = folderFor(b);
+  const started = learn.runInBackground('learn', folder, () => learn.learnFromFeedback(folder));
   if (!started) throw httpError(409, 'Un apprentissage est déjà en cours.');
   return { started };
 });
@@ -273,14 +346,15 @@ route('POST', '/api/concepts', async (b) => {
   const input = normInput(b);
   if (!input.title) throw httpError(400, 'Donne au moins le titre de ta vidéo.');
   const d = db();
+  const folder = folderFor(b);
   const hasFace = input.useFace && d.faces.length > 0;
   let concepts;
   if (store.config.brain.provider === 'demo') {
-    concepts = demo.concepts(input, d.da, input.count);
+    concepts = demo.concepts(input, folder.da, input.count);
   } else {
     const res = await providers.brainJson({
       system: P.SYSTEM,
-      user: P.conceptsPrompt({ input, da: d.da, channel: d.channel, examples: P.pickExamples(d.generations), hasFace, count: input.count }),
+      user: P.conceptsPrompt({ input, da: folder.da, channel: learn.channelFor(folder), examples: P.pickExamples(learn.folderGens(folder)), hasFace, count: input.count }),
       temperature: 0.95,
     });
     concepts = P.normalizeConcepts(res, input.count, input);
@@ -292,14 +366,16 @@ route('POST', '/api/generate', async (b) => {
   const input = normInput(b.input);
   const concept = normConcept(b.concept);
   const d = db();
-  const refs = await gatherRefs(input.useFace && d.faces.length > 0);
+  const folder = folderFor(b);
+  const refs = await gatherRefs(input.useFace && d.faces.length > 0, folder);
   const out = await providers.makeImage({
-    buildPrompt: (used, tag) => P.buildImagePrompt({ concept, da: d.da, textMode: input.textMode, refs: used, tag }),
+    buildPrompt: (used, tag) => P.buildImagePrompt({ concept, da: folder.da, textMode: input.textMode, refs: used, tag }),
     refs,
-    demoHint: { seedText: concept.angle + input.title, palette: (d.da?.palette || []).map((p) => p.hex), subjectPosition: concept.subjectPosition },
+    demoHint: { seedText: concept.angle + input.title, palette: (folder.da?.palette || []).map((p) => p.hex), subjectPosition: concept.subjectPosition },
   });
   const gen = {
     id: uid('g'),
+    folderId: folder.id,
     createdAt: now(),
     input,
     concept,
@@ -317,7 +393,7 @@ route('POST', '/api/generate', async (b) => {
     layers: null,
     adjust: null,
     parentId: str(b.parentId, 40) || null,
-    daVersion: d.daVersion,
+    daVersion: folder.daVersion || 0,
   };
   d.generations.unshift(gen);
   store.addUsage(gen.costUsd);
@@ -330,6 +406,7 @@ route('POST', '/api/generations/:id/edit', async (b, { id }) => {
   const instruction = str(b.instruction, 600);
   if (!instruction) throw httpError(400, 'Dis ce que tu veux changer.');
   const d = db();
+  const folder = folderById(src.folderId) || activeFolder();
   const refs = [{ role: 'source', label: 'thumbnail to edit', ...(await store.readImage('gens', src.file)) }];
   if (src.input?.useFace && d.faces[0]) {
     try { refs.push({ role: 'face', label: 'photo of the YouTuber', ...(await store.readImage('faces', d.faces[0].file)) }); } catch (_) { /* rien */ }
@@ -337,7 +414,7 @@ route('POST', '/api/generations/:id/edit', async (b, { id }) => {
   const out = await providers.makeImage({
     buildPrompt: (used, tag) => P.buildEditPrompt({ instruction, textMode: src.input?.textMode, refs: used, tag }),
     refs,
-    demoHint: { seedText: instruction, palette: (d.da?.palette || []).map((p) => p.hex), subjectPosition: src.concept?.subjectPosition },
+    demoHint: { seedText: instruction, palette: (folder.da?.palette || []).map((p) => p.hex), subjectPosition: src.concept?.subjectPosition },
   });
   const gen = {
     ...JSON.parse(JSON.stringify(src)),
@@ -358,7 +435,8 @@ route('POST', '/api/generations/:id/edit', async (b, { id }) => {
     final: false,
     exportFile: null,
     parentId: src.id,
-    daVersion: d.daVersion,
+    folderId: folder.id,
+    daVersion: folder.daVersion || 0,
   };
   d.generations.unshift(gen);
   store.addUsage(gen.costUsd);
@@ -373,8 +451,9 @@ route('POST', '/api/generations/:id/rate', async (b, { id }) => {
   g.ratedAt = now();
   if (g.rating !== 0 || g.comment) countFeedback(g);
   store.saveDb();
-  const learningStarted = learn.maybeAutoLearn();
-  return { generation: g, learningStarted, stats: db().stats };
+  const folder = folderById(g.folderId);
+  const learningStarted = learn.maybeAutoLearn(folder);
+  return { generation: g, learningStarted, stats: { ...db().stats, ...(folder?.stats || {}) } };
 });
 
 route('PATCH', '/api/generations/:id', async (b, { id }) => {
@@ -408,7 +487,7 @@ route('POST', '/api/generations/:id/export', async (b, { id }) => {
   g.ratedAt = now();
   countFeedback(g);
   store.saveDb();
-  const learningStarted = learn.maybeAutoLearn();
+  const learningStarted = learn.maybeAutoLearn(folderById(g.folderId));
   return { generation: g, path: 'Galerie → filtre « ✅ Finales »', learningStarted };
 });
 
@@ -420,6 +499,7 @@ route('POST', '/api/generations/:id/to-ref', async (b, { id }) => {
   const src = g.exportFile ? await store.readImage('exports', g.exportFile) : await store.readImage('gens', g.file);
   const ref = {
     id: uid('r'),
+    folderId: g.folderId || activeFolder().id,
     file: await store.saveImage('refs', src.blob, src.mime, 'r'),
     thumb: null,
     kind: 'mine',
@@ -480,10 +560,7 @@ route('POST', '/api/restore', async (b) => {
     await store.writeFile(dir, name, blob);
     blobs.set(key, blob);
   }
-  const restored = store.deepMerge(JSON.parse(JSON.stringify({
-    schema: 1, channel: {}, da: null, daVersion: 0, daHistory: [], refs: [], faces: [], generations: [],
-    stats: { feedbackSinceLearn: 0, totalFeedback: 0, imagesGenerated: 0, costUsd: 0, monthly: {}, lastLearnAt: null },
-  })), bk.db);
+  const restored = store.migrate(store.deepMerge(JSON.parse(JSON.stringify(store.DEFAULT_DB)), bk.db));
   // Les miniatures finales reviennent avec leur texte déjà incrusté.
   const gens = [];
   for (const g of restored.generations || []) {
