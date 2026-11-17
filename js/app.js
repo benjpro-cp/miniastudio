@@ -246,6 +246,7 @@ function renderCreate() {
           <p class="cost-hint" id="cost-hint"></p>
         </form>
         <div>
+          <div id="demo-banner"></div>
           <div id="onboarding"></div>
           <div id="concepts"></div>
           <div id="results-head" class="toolbar" hidden>
@@ -297,7 +298,27 @@ function keyOk(p) {
   return p === 'demo' || p === 'forge' || p === 'custom' || !!c.keys[p]?.set;
 }
 
+function isDemo() {
+  const c = D().config;
+  return c.brain.provider === 'demo' || c.image.provider === 'demo';
+}
+
+function updateDemoBanner() {
+  const el = $('#demo-banner');
+  if (!el) return;
+  const c = D().config;
+  if (!isDemo()) { el.innerHTML = ''; return; }
+  const what = c.brain.provider === 'demo' && c.image.provider === 'demo' ? 'les idées et les images sont factices (aucune IA)'
+    : c.image.provider === 'demo' ? 'les images sont factices (le générateur d\'images est en démo)' : 'les idées sont basiques (le cerveau est en démo)';
+  el.innerHTML = `<div class="demo-banner">
+    <div><strong>🧪 Mode démo sur ce navigateur :</strong> ${what}.<br>
+    <span class="small">Tes réglages et ta clé sont enregistrés <strong>dans chaque navigateur</strong> : si tu as branché Gemini sur un autre ordinateur, refais-le ici (2 minutes).</span></div>
+    <button class="btn primary" data-view="settings">Brancher Gemini</button>
+  </div>`;
+}
+
 function updateOnboarding() {
+  updateDemoBanner();
   const el = $('#onboarding');
   if (!el) return;
   const d = D();
@@ -827,9 +848,11 @@ function renderDA() {
           <h2>🙂 Ton visage <span class="hint">facultatif</span></h2>
           <p class="muted small">2 à 4 photos nettes de toi (face caméra, bonne lumière, sans lunettes de soleil). L'IA s'en sert pour te mettre dans les miniatures. Les 2 premières sont utilisées. Communes à tous les dossiers : pour un dossier sans ton visage (ex : GTA), décoche « Me mettre dans la miniature » dans Créer.</p>
           <div class="drop" data-drop="faces">📸 Glisse tes photos ici ou clique<input type="file" accept="image/*" multiple hidden></div>
+          ${d.faces.length > 4 ? `<div class="warn-box mt">⚠️ Tu as <strong>${d.faces.length} photos</strong> ici. Cette zone est seulement pour des photos de <strong>toi</strong> (les 2 premières servent). Des personnages ou des images GTA (Jason, Lucia…) ? Leur place est dans la <strong>🧩 Banque d'images</strong> du dossier : c'est là que l'IA les choisit.
+            <div class="row tight mt"><button class="btn small" data-da="faces-to-bank">🧩 Déplacer ces ${d.faces.length} photos dans la banque de « ${esc(currentFolder()?.name || '')} »</button></div></div>` : ''}
           <div class="refs faces">${d.faces.map((f) => `
             <div class="ref" data-face="${f.id}"><img src="${f.thumb ? fileUrl('thumbs', f.thumb) : fileUrl('faces', f.file)}" alt="">
-            <div class="ref-bar"><span class="spacer"></span><button data-f-del="${f.id}" title="Supprimer">🗑️</button></div></div>`).join('')}</div>
+            <div class="ref-bar"><button data-f-move="${f.id}" title="Ce n'est pas moi : déplacer dans la banque d'images du dossier">🧩</button><span class="spacer"></span><button data-f-del="${f.id}" title="Supprimer">🗑️</button></div></div>`).join('')}</div>
         </div>
       </div>
 
@@ -1015,6 +1038,8 @@ function bindDA(root) {
     }
     const ab = e.target.closest('[data-asset-act]');
     if (ab) { assetAction(ab); return; }
+    const fmove = e.target.closest('[data-f-move]');
+    if (fmove) { moveFacesToBank([fmove.dataset.fMove]); return; }
     const fdel = e.target.closest('[data-f-del]');
     if (fdel) {
       if (!confirm('Supprimer cette photo ?')) return;
@@ -1078,6 +1103,9 @@ function bindDA(root) {
         openFolderModal('edit', currentFolder());
       } else if (act === 'asset-create') {
         createAsset(b);
+      } else if (act === 'faces-to-bank') {
+        if (!window.confirm(`Déplacer les ${D().faces.length} photos de « Ton visage » dans la banque d'images de « ${currentFolder()?.name} » ?`)) return;
+        moveFacesToBank(D().faces.map((f) => f.id));
       }
     } catch (err) { toast(err.message, 'err', 8000); }
   };
@@ -1154,6 +1182,7 @@ function renderSettings() {
     <div class="panel">
       <h2>🔑 Clés API</h2>
       <p class="muted small">Tes clés restent dans ce navigateur, sur cet appareil. Elles ne sont envoyées qu'au fournisseur concerné (jamais à MiniaStudio ni à personne d'autre).</p>
+      <p class="small warn-line">⚠️ Ces réglages sont propres à <strong>ce navigateur</strong> : sur un autre ordinateur, un autre navigateur ou ton téléphone, il faut recoller ta clé.</p>
       ${Object.keys(KEY_NAMES).map((k) => `
         <div class="key-row">
           <span class="name">${KEY_NAMES[k]} ${c.keys[k].set ? '<span class="tag ok">✓</span>' : ''}</span>
@@ -1539,6 +1568,23 @@ async function createAsset(btn) {
   } catch (err) { toast(err.message, 'err', 9000); }
   btn.disabled = false;
   btn.textContent = '✨ Créer l\'élément';
+}
+
+// Photos mises par erreur dans « Ton visage » (personnages, images GTA…) → banque d'images du dossier.
+async function moveFacesToBank(ids) {
+  const folderId = D().activeFolder;
+  const moved = [];
+  assetsStatus(`<span class="spinner"></span> Déplacement de ${ids.length} image(s) vers la banque…`);
+  for (const id of ids) {
+    try {
+      const { asset } = await api.post(`/api/faces/${id}/to-asset`, { folderId });
+      moved.push(asset.id);
+    } catch (err) { toast(err.message, 'err'); }
+  }
+  S.data = await api.get('/api/state');
+  renderDA();
+  toast(`🧩 ${moved.length} image(s) rangée(s) dans la banque de « ${folderName(folderId)} »`, 'ok');
+  await labelAssets(moved, folderId);
 }
 
 function conceptAssetsHtml(c) {

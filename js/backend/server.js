@@ -438,6 +438,37 @@ route('POST', '/api/faces', async (b) => {
   return { face };
 });
 
+route('POST', '/api/faces/:id/to-asset', async (b, { id }) => {
+  const d = db();
+  const f = d.faces.find((x) => x.id === id);
+  if (!f) throw httpError(404, 'Photo introuvable.');
+  const folder = folderFor(b);
+  const img = await store.readImage('faces', f.file);
+  const asset = {
+    id: uid('a'),
+    folderId: folder.id,
+    file: await store.saveImage('assets', img.blob, img.mime, 'a'),
+    thumb: null,
+    name: 'Personnage',
+    kind: 'character',
+    note: '',
+    pinned: false,
+    renamed: false,
+    labeled: false,
+    addedAt: now(),
+  };
+  if (f.thumb) {
+    const th = await store.readImage('thumbs', f.thumb);
+    asset.thumb = await store.saveImage('thumbs', th.blob, th.mime, 'at');
+  }
+  d.assets.push(asset);
+  d.faces = d.faces.filter((x) => x.id !== id);
+  await store.removeFile('faces', f.file);
+  if (f.thumb) await store.removeFile('thumbs', f.thumb);
+  store.saveDb();
+  return { asset };
+});
+
 route('DELETE', '/api/faces/:id', async (b, { id }) => {
   const d = db();
   const f = d.faces.find((x) => x.id === id);

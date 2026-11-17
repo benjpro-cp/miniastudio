@@ -87,6 +87,17 @@ export async function makeImage({ seedText = '', palette = [], subjectPosition =
   v.addColorStop(1, 'rgba(0,0,0,0.5)');
   ctx.fillStyle = v;
   ctx.fillRect(0, 0, W, H);
+  // Bien visible : ce n'est pas une vraie image d'IA.
+  const label = 'MODE DÉMO · image factice · branche Gemini dans Réglages';
+  ctx.font = `800 ${Math.round(W / 42)}px Inter, system-ui, sans-serif`;
+  const tw = ctx.measureText(label).width;
+  const bh = Math.round(W / 26);
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect((W - tw) / 2 - 18, H - bh - 22, tw + 36, bh);
+  ctx.fillStyle = '#FFD400';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, W / 2, H - bh / 2 - 22);
   return new Promise((resolve) => c.toBlob(resolve, 'image/png'));
 }
 
