@@ -33,6 +33,19 @@ Tu fais des vidéos GTA, des vidéos sur les films, sur l'histoire… ? Crée **
 
 ---
 
+## 🧩 La banque d'images de chaque dossier
+
+Pour les vidéos où ce n'est pas toi qui apparais (GTA : ton perso, des voitures, des logos…), mets ces images dans **🎨 Ma DA → 🧩 Banque d'images** du dossier.
+
+- **Glisse tes images** : l'IA les reconnaît et leur donne un nom, un type (personnage, véhicule, logo, lieu…) et une description. Tu peux tout corriger.
+- **⭐ = toujours présent** dans les miniatures de ce dossier (par exemple ton personnage principal).
+- À chaque miniature, **l'IA choisit elle-même** les éléments qui collent au titre, et Gemini reçoit leurs images pour les reproduire fidèlement.
+- **Ce qui manque, Gemini le crée.** Tu peux aussi lui demander un élément (« une Lamborghini dorée vue de 3/4 ») avec « ✨ Créer l'élément » : il est rangé dans la banque pour les prochaines fois.
+- « Me mettre dans la miniature » (écran Créer) est **mémorisé pour chaque dossier** : décoche-le pour GTA, laisse-le coché pour tes vlogs.
+- Avec « Voir et modifier les idées avant », tu vois les éléments choisis pour chaque idée, et tu peux en ajouter ou en retirer.
+
+---
+
 ## Gemini gratuit : comment ça marche
 
 | Façon d'utiliser Gemini | Cerveau (analyse + idées) | Images |

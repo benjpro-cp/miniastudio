@@ -336,3 +336,17 @@ code { background: var(--panel-3); padding: 1px 6px; border-radius: 6px; font-si
   .folder-bar { margin-left: 0; }
   .folder-pick select { max-width: 140px; }
 }
+
+/* ---------- Banque d'images ---------- */
+.assets-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }
+.asset { background: var(--panel-2); border: 2px solid transparent; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.asset.pinned { border-color: var(--accent-2); }
+.asset-img { position: relative; aspect-ratio: 1; overflow: hidden; background: repeating-conic-gradient(#202028 0% 25%, #191920 0% 50%) 50% / 18px 18px; }
+.asset-img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+.asset-name { margin: 6px 6px 0; width: calc(100% - 12px) !important; padding: 6px 8px !important; font-size: .82rem !important; }
+.asset-bar { display: flex; gap: 4px; padding: 6px; align-items: center; }
+.asset-bar select { flex: 1; min-width: 0; padding: 4px 6px; font-size: .78rem; }
+.asset-bar button { background: var(--panel-3); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 3px 7px; cursor: pointer; font-size: .82rem; }
+.concept-assets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 10px; }
+.concept-assets select { width: auto; padding: 4px 8px; font-size: .8rem; }
+#asset-hint { margin: -4px 0 12px; }

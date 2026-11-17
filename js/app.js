@@ -231,6 +231,7 @@ function renderCreate() {
           <label>Ce que tu veux absolument voir <span class="hint">(facultatif)</span>
             <input name="constraints" maxlength="500" placeholder="Ex : moi dégoûté, un lit sale, fond rouge"></label>
           <label class="toggle"><input type="checkbox" name="useFace" checked> <span>Me mettre dans la miniature <span class="hint" id="face-hint"></span></span></label>
+          <p class="hint" id="asset-hint" hidden></p>
           <div class="row">
             <label>Texte
               <select name="textMode">
@@ -288,6 +289,7 @@ function renderCreate() {
   updateCostHint();
   const fh = $('#face-hint');
   if (fh) fh.textContent = D().faces.length ? `(${D().faces.length} photo(s) de toi)` : '(ajoute tes photos dans « Ma DA »)';
+  syncFaceSetting();
 }
 
 function keyOk(p) {
@@ -392,6 +394,7 @@ function renderConcepts() {
           <p class="why">${esc(c.why)}</p>
           <label>Texte sur la miniature<input data-k="text" value="${esc(c.text)}"></label>
           <label>Ce qu'on voit sur l'image<textarea data-k="scene" rows="3">${esc(c.scene)}</textarea></label>
+          ${conceptAssetsHtml(c)}
           <details><summary>Prompt exact envoyé au générateur</summary><textarea data-k="imagePrompt" rows="6">${esc(c.imagePrompt)}</textarea></details>
         </div>`).join('')}
       </div>
@@ -411,7 +414,20 @@ function renderConcepts() {
       if (ta) ta.value = c.imagePrompt;
     }
   };
+  el.onchange = (e) => {
+    if (!e.target.matches('[data-add-asset]') || !e.target.value) return;
+    const c = S.concepts[Number(e.target.closest('[data-i]').dataset.i)];
+    c.assetIds = [...new Set([...(c.assetIds || []), e.target.value])].slice(0, 4);
+    renderConcepts();
+  };
   el.onclick = (e) => {
+    const rm = e.target.closest('[data-rm-asset]');
+    if (rm) {
+      const c = S.concepts[Number(rm.closest('[data-i]').dataset.i)];
+      c.assetIds = (c.assetIds || []).filter((id) => id !== rm.dataset.rmAsset);
+      renderConcepts();
+      return;
+    }
     const b = e.target.closest('[data-c]');
     if (!b) return;
     if (b.dataset.c === 'cancel') { S.concepts = []; renderConcepts(); return; }
@@ -521,7 +537,7 @@ function renderResultCard(r) {
           <button class="btn small" data-act="download" title="Télécharger en JPG (1280×720)">⬇️</button>
         </div>
         <div class="retouch" hidden><input data-retouch placeholder="Ex : fond rouge, moi plus surpris…"><button class="btn small primary" data-act="retouch">OK</button></div>
-        <div class="card-meta"><span>${esc(providerLabel(g.provider))}${g.model && g.model !== g.provider ? ` · ${esc(g.model)}` : ''}</span>${g.costUsd ? `<span>≈ ${g.costUsd.toFixed(3)} $</span>` : ''}${g.usedRefs ? `<span>${g.usedRefs} image(s) de référence</span>` : ''}</div>` : ''}
+        <div class="card-meta"><span>${esc(providerLabel(g.provider))}${g.model && g.model !== g.provider ? ` · ${esc(g.model)}` : ''}</span>${g.costUsd ? `<span>≈ ${g.costUsd.toFixed(3)} $</span>` : ''}${g.usedRefs ? `<span>${g.usedRefs} image(s) de référence</span>` : ''}${g.assetNames?.length ? `<span>🧩 ${esc(g.assetNames.join(', '))}</span>` : ''}</div>` : ''}
     </div>`;
   if (g && r.status === 'done') paintGen($('canvas', el), g, false);
 }
@@ -795,9 +811,21 @@ function renderDA() {
           <div class="refs" id="refs-grid">${d.refs.map(refCard).join('')}</div>
         </div>
 
+        <div class="panel" id="assets-panel">
+          <h2>🧩 Banque d'images <span class="hint">${(d.assets || []).length}</span></h2>
+          <p class="muted small">Personnages, véhicules, logos, lieux, objets… L'IA choisit elle-même ceux qui collent à chaque miniature, et Gemini crée ce qui manque. ⭐ = toujours présent dans les miniatures de ce dossier (ex : ton perso GTA).</p>
+          <div class="drop" data-drop="assets">🧩 Glisse tes images ici (personnages, voitures, logos…) ou clique<input type="file" accept="image/*" multiple hidden></div>
+          <div class="row tight mt">
+            <input data-asset-new maxlength="300" placeholder="Ou fais-le créer par Gemini : ex. « une Lamborghini dorée vue de 3/4 »" style="flex:1 1 220px">
+            <button class="btn small" data-da="asset-create">✨ Créer l'élément</button>
+          </div>
+          <div id="assets-status"></div>
+          <div class="assets-grid" id="assets-grid">${(d.assets || []).map(assetCard).join('')}</div>
+        </div>
+
         <div class="panel">
           <h2>🙂 Ton visage <span class="hint">facultatif</span></h2>
-          <p class="muted small">2 à 4 photos nettes de toi (face caméra, bonne lumière, sans lunettes de soleil). L'IA s'en sert pour te mettre dans les miniatures. Les 2 premières sont utilisées.</p>
+          <p class="muted small">2 à 4 photos nettes de toi (face caméra, bonne lumière, sans lunettes de soleil). L'IA s'en sert pour te mettre dans les miniatures. Les 2 premières sont utilisées. Communes à tous les dossiers : pour un dossier sans ton visage (ex : GTA), décoche « Me mettre dans la miniature » dans Créer.</p>
           <div class="drop" data-drop="faces">📸 Glisse tes photos ici ou clique<input type="file" accept="image/*" multiple hidden></div>
           <div class="refs faces">${d.faces.map((f) => `
             <div class="ref" data-face="${f.id}"><img src="${f.thumb ? fileUrl('thumbs', f.thumb) : fileUrl('faces', f.file)}" alt="">
@@ -985,6 +1013,8 @@ function bindDA(root) {
       } catch (err) { toast(err.message, 'err'); }
       return;
     }
+    const ab = e.target.closest('[data-asset-act]');
+    if (ab) { assetAction(ab); return; }
     const fdel = e.target.closest('[data-f-del]');
     if (fdel) {
       if (!confirm('Supprimer cette photo ?')) return;
@@ -1046,13 +1076,17 @@ function bindDA(root) {
         importYouTube(b);
       } else if (act === 'edit-folder') {
         openFolderModal('edit', currentFolder());
+      } else if (act === 'asset-create') {
+        createAsset(b);
       }
     } catch (err) { toast(err.message, 'err', 8000); }
   };
   root.onchange = (e) => {
+    if (e.target.matches('[data-asset-f]')) { assetField(e.target); return; }
     if (e.target.matches('input[type=file]')) {
       const which = e.target.closest('[data-drop]').dataset.drop;
       if (which === 'refs') addRefFiles(e.target.files, currentRefKind());
+      else if (which === 'assets') addAssetFiles(e.target.files);
       else addFaceFiles(e.target.files);
       e.target.value = '';
     }
@@ -1066,6 +1100,7 @@ function bindDA(root) {
       e.preventDefault();
       z.classList.remove('over');
       if (z.dataset.drop === 'refs') addRefFiles(e.dataTransfer.files, currentRefKind());
+      else if (z.dataset.drop === 'assets') addAssetFiles(e.dataTransfer.files);
       else addFaceFiles(e.dataTransfer.files);
     });
   });
@@ -1391,6 +1426,154 @@ const editor = new Editor({
   },
   onDownload: (g, blob) => saveBlob(blob, fileName(g)),
 });
+
+// ==================================================================
+// BANQUE D'IMAGES (personnages, véhicules, logos…) : par dossier
+// ==================================================================
+const ASSET_KIND_LABELS = { character: 'Personnage', vehicle: 'Véhicule', object: 'Objet', place: 'Lieu / décor', logo: 'Logo', other: 'Autre' };
+const assetById = (id) => (D().assets || []).find((a) => a.id === id);
+const assetThumb = (a) => (a.thumb ? fileUrl('thumbs', a.thumb) : fileUrl('assets', a.file));
+
+function assetCard(a) {
+  return `<div class="asset ${a.pinned ? 'pinned' : ''}" data-asset="${a.id}">
+    <div class="asset-img"><img src="${assetThumb(a)}" alt="" loading="lazy" title="${esc(a.note || a.name)}"></div>
+    <input class="asset-name" data-asset-f="name" value="${esc(a.name)}" maxlength="60" title="Nom de l'élément (l'IA s'en sert pour le choisir)">
+    <div class="asset-bar">
+      <select data-asset-f="kind" title="Type">${Object.entries(ASSET_KIND_LABELS).map(([k, l]) => `<option value="${k}" ${a.kind === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+      <button type="button" data-asset-act="pin" title="${a.pinned ? 'Ne plus mettre d\'office' : 'Toujours présent dans les miniatures de ce dossier'}">${a.pinned ? '⭐' : '☆'}</button>
+      <button type="button" data-asset-act="del" title="Supprimer">🗑️</button>
+    </div>
+  </div>`;
+}
+
+function renderAssetsGrid() {
+  const grid = $('#assets-grid');
+  if (!grid) return;
+  grid.innerHTML = (D().assets || []).map(assetCard).join('');
+  const h = $('#assets-panel h2 .hint');
+  if (h) h.textContent = String((D().assets || []).length);
+}
+
+function assetsStatus(html) {
+  const el = $('#assets-status');
+  if (el) el.innerHTML = html ? `<div class="progress-line mt">${html}</div>` : '';
+}
+
+async function assetField(el) {
+  const id = el.closest('[data-asset]').dataset.asset;
+  const patch = { [el.dataset.assetF]: el.value };
+  try {
+    const { asset } = await api.patch(`/api/assets/${id}`, patch);
+    Object.assign(assetById(id) || {}, asset);
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+async function assetAction(btn) {
+  const id = btn.closest('[data-asset]').dataset.asset;
+  const a = assetById(id);
+  if (!a) return;
+  try {
+    if (btn.dataset.assetAct === 'del') {
+      if (!window.confirm(`Supprimer « ${a.name} » de la banque d'images ?`)) return;
+      await api.del(`/api/assets/${id}`);
+      D().assets = D().assets.filter((x) => x.id !== id);
+    } else {
+      const { asset } = await api.patch(`/api/assets/${id}`, { pinned: !a.pinned });
+      Object.assign(a, asset);
+    }
+    renderAssetsGrid();
+  } catch (err) { toast(err.message, 'err'); }
+}
+
+// L'IA reconnaît les nouvelles images (nom, type, description) : modifiable ensuite.
+async function labelAssets(ids, folderId) {
+  if (!ids.length || D().config.brain.provider === 'demo') return;
+  assetsStatus(`<span class="spinner"></span> L'IA reconnaît tes ${ids.length} image(s)…`);
+  try {
+    const { assets } = await api.post('/api/assets/label', { ids });
+    if (D().activeFolder === folderId) for (const a of assets) Object.assign(assetById(a.id) || {}, a);
+  } catch (err) { toast(`Reconnaissance des images : ${err.message}`, 'err', 8000); }
+  assetsStatus('');
+  if (D().activeFolder === folderId) renderAssetsGrid();
+}
+
+async function addAssetFiles(files) {
+  const list = [...files].filter((f) => /^image\//.test(f.type));
+  if (!list.length) return;
+  const folderId = D().activeFolder;
+  const ids = [];
+  assetsStatus(`<span class="spinner"></span> Ajout de ${list.length} image(s)…`);
+  for (const f of list) {
+    try {
+      const img = await fileToImage(f);
+      const type = /png|webp|gif/.test(f.type) ? 'image/png' : 'image/jpeg';
+      const name = f.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim().slice(0, 60) || 'Élément';
+      const { asset } = await api.post('/api/assets', { dataUrl: fitDataUrl(img, 1024, type, 0.9), thumbDataUrl: fitDataUrl(img, 360, type, 0.85), name, folderId });
+      if (D().activeFolder === folderId) { D().assets.push(asset); renderAssetsGrid(); }
+      ids.push(asset.id);
+    } catch (e) { toast(`${f.name} : ${e.message}`, 'err'); }
+  }
+  assetsStatus('');
+  toast(`🧩 ${ids.length} élément(s) ajouté(s) à « ${folderName(folderId)} »`, 'ok');
+  await labelAssets(ids, folderId);
+}
+
+async function createAsset(btn) {
+  const input = $('[data-asset-new]');
+  const description = input.value.trim();
+  if (!description) { input.focus(); return; }
+  const folderId = D().activeFolder;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Gemini crée l\'élément…';
+  try {
+    const { asset } = await api.post('/api/assets/create', { description, folderId });
+    try {
+      const img = await loadImage(fileUrl('assets', asset.file));
+      const { thumb } = await api.post(`/api/assets/${asset.id}/thumb`, { dataUrl: fitDataUrl(img, 360, 'image/jpeg', 0.85) });
+      asset.thumb = thumb;
+    } catch (_) { /* l'aperçu n'est qu'un confort */ }
+    if (D().activeFolder === folderId) { D().assets.push(asset); renderAssetsGrid(); }
+    input.value = '';
+    toast(`✨ « ${description} » ajouté à la banque d'images`, 'ok');
+    await labelAssets([asset.id], folderId);
+  } catch (err) { toast(err.message, 'err', 9000); }
+  btn.disabled = false;
+  btn.textContent = '✨ Créer l\'élément';
+}
+
+function conceptAssetsHtml(c) {
+  if (!(D().assets || []).length) return '';
+  const chosen = (c.assetIds || []).map(assetById).filter(Boolean);
+  const others = D().assets.filter((a) => !(c.assetIds || []).includes(a.id));
+  return `<div class="concept-assets"><span class="small muted">🧩 Éléments :</span>
+    ${chosen.map((a) => (a.pinned ? `<span class="chip on" title="Toujours présent (⭐)">⭐ ${esc(a.name)}</span>` : `<span class="chip on" data-rm-asset="${a.id}" title="Retirer">${esc(a.name)} ✕</span>`)).join('')}
+    ${others.length ? `<select data-add-asset><option value="">＋ ajouter</option>${others.map((a) => `<option value="${a.id}">${esc(a.name)}</option>`).join('')}</select>` : ''}
+    ${chosen.length ? '' : '<span class="small muted">aucun (Gemini crée tout)</span>'}
+  </div>`;
+}
+
+// « Me mettre dans la miniature » est mémorisé pour chaque dossier.
+function syncFaceSetting() {
+  const f = $('#create-form');
+  const cf = currentFolder();
+  if (!f || !cf) return;
+  f.useFace.checked = cf.useFace !== false;
+  if (!f.useFace.dataset.bound) {
+    f.useFace.dataset.bound = '1';
+    f.useFace.addEventListener('change', async () => {
+      const folder = currentFolder();
+      if (!folder) return;
+      folder.useFace = f.useFace.checked;
+      try { await api.patch(`/api/folders/${folder.id}`, { useFace: f.useFace.checked }); } catch (err) { toast(err.message, 'err'); }
+      syncFaceSetting();
+    });
+  }
+  const hint = $('#asset-hint');
+  const n = (D().assets || []).length;
+  const chars = (D().assets || []).filter((a) => a.kind === 'character').length;
+  hint.hidden = !n;
+  hint.textContent = n ? `🧩 ${n} élément(s) dans la banque de « ${cf.name} »${!f.useFace.checked && chars ? ` : sans ton visage, le sujet sera un de tes ${chars} personnage(s)` : ''}. L'IA choisit ceux qui collent à chaque miniature.` : '';
+}
 
 // ==================================================================
 // DOSSIERS (GTA, films, histoire…) : chacun a ses références, sa DA et son apprentissage

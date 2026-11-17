@@ -160,7 +160,7 @@ export function synthesizeDA(refs, channel, prev) {
 const HOOKS = ['INCROYABLE', 'LA VÉRITÉ', 'JAMAIS ÇA', 'ÇA A MAL TOURNÉ', 'JE NE M\'ATTENDAIS PAS À ÇA', 'LE PIRE', 'ENFIN !', 'NON...'];
 const EMOTIONS = ['choqué', 'enthousiaste', 'inquiet', 'mystérieux'];
 
-export function concepts(input, da, count = 3) {
+export function concepts(input, da, count = 3, assets = []) {
   const words = String(input.title || '').toUpperCase().split(/\s+/).filter((w) => w.length > 2);
   const maxW = da?.typography?.maxWords || 4;
   const out = [];
@@ -179,6 +179,8 @@ export function concepts(input, da, count = 3) {
       emotion: EMOTIONS[i % EMOTIONS.length],
       scene: `Le créateur ${EMOTIONS[i % EMOTIONS.length]} en gros plan, en lien avec « ${input.title} ».`,
       imagePrompt: `Close-up of a YouTuber with a ${EMOTIONS[i % EMOTIONS.length]} expression, related to: ${input.title}. ${input.idea || ''}`.trim(),
+      // Démo : les éléments ★ + un élément de la banque différent pour chaque idée
+      assets: [...new Set([...assets.filter((a) => a.pinned).map((a) => a.code), ...(assets.length ? [assets[i % assets.length].code] : [])])].slice(0, 3),
     });
   }
   return out;

@@ -136,8 +136,28 @@ function pickExamples(generations) {
   return { loved, hated };
 }
 
-function conceptsPrompt({ input, da, channel, examples, hasFace, count }) {
+// Types d'éléments de la banque d'images
+const ASSET_KINDS = {
+  character: ['personnage', 'character'],
+  vehicle: ['véhicule', 'vehicle'],
+  object: ['objet', 'object'],
+  place: ['lieu', 'place / background'],
+  logo: ['logo', 'logo'],
+  other: ['autre', 'element'],
+};
+
+function assetsBlock(assets) {
+  if (!assets.length) return '';
+  return `
+BANQUE D'IMAGES de ce dossier (si tu choisis un élément, son image exacte sera donnée au générateur d'images) :
+${assets.map((a) => `${a.code} — ${a.name} (${ASSET_KINDS[a.kind]?.[0] || 'autre'})${a.note ? ` : ${a.note}` : ''}${a.pinned ? ' ★ TOUJOURS PRÉSENT (inclus d\'office dans chaque miniature)' : ''}`).join('\n')}
+Pour chaque concept, mets dans "assets" les codes des éléments à utiliser en plus des ★ (0 à 3, seulement ceux qui servent vraiment l'idée). Les ★ sont toujours présents : construis l'image autour d'eux. Dans "imagePrompt", appelle chaque élément par son nom. Tout ce qui n'est pas dans la banque sera créé par le générateur d'images, dans le même style.
+`;
+}
+
+function conceptsPrompt({ input, da, channel, examples, hasFace, count, assets = [] }) {
   const maxWords = clamp(da?.typography?.maxWords || 4, 1, 8);
+  const hasCharacters = assets.some((a) => a.kind === 'character');
   return `Chaîne :
 ${channelBlock(channel)}
 
@@ -149,9 +169,9 @@ NOUVELLE VIDÉO
 - Titre : « ${input.title} »
 - Ce qui se passe dans la vidéo : ${input.idea || '(non précisé : déduis-le du titre)'}
 - Éléments imposés : ${input.constraints || '(aucun)'}
-- Le créateur apparaît dans la miniature : ${hasFace ? 'OUI (on a des photos du créateur : c\'est le sujet principal, avec une expression forte)' : 'non (pas de photo du créateur : sujet = objet, scène, personnage générique...)'}
+- Le créateur apparaît dans la miniature : ${hasFace ? 'OUI (on a des photos du créateur : c\'est le sujet principal, avec une expression forte)' : hasCharacters ? 'NON : le sujet principal est un PERSONNAGE de la banque d\'images ci-dessous (avec une expression ou une pose forte), ou un élément fort de la scène' : 'non (pas de photo du créateur : sujet = objet, scène, personnage générique...)'}
 - Texte : ${input.textMode === 'image' ? 'dessiné directement par le générateur d\'images' : 'ajouté APRÈS par le site → l\'image ne doit contenir AUCUN texte'}
-
+${assetsBlock(assets)}
 Propose ${count} concept(s) de miniature TRÈS différents entre eux (ex : émotion/visage, résultat/objet, avant-après ou contraste, mystère/curiosité, chiffre/enjeu...), tous fidèles à la DA et aux préférences apprises.
 
 Règles :
@@ -160,7 +180,7 @@ Règles :
 - "subjectPosition" et "textPosition" ne doivent pas se chevaucher (ex : sujet à droite, texte à gauche).
 
 Réponds en JSON :
-{"concepts":[{"angle":"nom court de l'idée","why":"pourquoi ça va donner envie de cliquer (1 phrase)","text":"TEXTE","textPosition":"left|right|top|bottom|center","subjectPosition":"left|right|center","emotion":"émotion principale","scene":"description de l'image en français (1-2 phrases)","imagePrompt":"English prompt..."}]}`;
+{"concepts":[{"angle":"nom court de l'idée","why":"pourquoi ça va donner envie de cliquer (1 phrase)","text":"TEXTE","textPosition":"left|right|top|bottom|center","subjectPosition":"left|right|center","emotion":"émotion principale","scene":"description de l'image en français (1-2 phrases)","imagePrompt":"English prompt...","assets":[${assets.length ? '"A1"' : ''}]}]}`;
 }
 
 // ---------- 4. Apprentissage à partir des retours ----------
@@ -253,6 +273,7 @@ function normalizeConcepts(raw, count, input) {
       emotion: str(c.emotion, 60) || 'surprise',
       scene: str(c.scene, 400),
       imagePrompt: str(c.imagePrompt, 1500) || str(c.scene, 400) || input.title,
+      assets: (Array.isArray(c.assets) ? c.assets : []).map((x) => String(x).trim().toUpperCase()).filter((x) => /^A\d{1,3}$/.test(x)).slice(0, 3),
     };
   });
   if (!list.length) throw new Error("L'IA n'a proposé aucune idée exploitable. Réessaie.");
@@ -272,10 +293,37 @@ function refsLines(refs, tag, emotion) {
   if (faces.length) {
     lines.push(`The person shown in ${faces.map((f) => tag(f.index)).join(' and ')} is the YouTuber: feature this exact same person, keep their real face identity, facial features, hairstyle, skin tone and age (do not beautify or change the face)${emotion ? `, with a strong, exaggerated "${emotion}" facial expression` : ''}.`);
   }
+  const assets = refs.filter((r) => r.role === 'asset');
+  if (assets.length) {
+    lines.push(`Include these provided elements exactly as they look in their reference images (same design, face, outfit, colors and details): ${assets.map((a) => `${tag(a.index)} = ${a.name}${ASSET_KINDS[a.kind] ? ` (${ASSET_KINDS[a.kind][1]})` : ''}`).join('; ')}. Anything else in the scene that is not provided must be created in the same visual style.`);
+  }
   if (styles.length) {
     lines.push(`Use ${styles.map((s) => tag(s.index)).join(', ')} only as STYLE references from the same channel (color grading, lighting, contrast, rendering, energy). Do not copy their subjects, layout details or any text.`);
   }
   return lines;
+}
+
+// ---------- Banque d'images : reconnaissance et création d'éléments ----------
+function labelAssetsPrompt(n, channel) {
+  return `Chaîne :
+${channelBlock(channel)}
+
+Voici ${n} image(s) ajoutée(s) à la BANQUE D'IMAGES de ce dossier : des éléments à réutiliser dans les miniatures (personnages, véhicules, objets, lieux, logos…).
+Pour chacune (dans l'ordre), donne :
+- "name" : un nom court et reconnaissable (2 à 5 mots, ex : « Franklin (GTA V) », « Lamborghini orange », « logo GTA VI ») ;
+- "kind" : character | vehicle | object | place | logo | other ;
+- "note" : une description visuelle courte (tenue, couleurs, détails qui le rendent reconnaissable).
+
+Réponds en JSON : {"assets":[{"image":1,"name":"…","kind":"character","note":"…"}]}`;
+}
+
+function elementPrompt({ description, da }) {
+  return [
+    `A single isolated element, to be reused later in YouTube thumbnails: ${description}.`,
+    'Centered, fully visible, plain simple neutral background, sharp and highly detailed, dramatic lighting.',
+    da?.imageStyle ? `Visual style: ${da.imageStyle}` : '',
+    'No text, no letters, no logos, no watermark.',
+  ].filter(Boolean).join('\n');
 }
 
 function buildImagePrompt({ concept, da, textMode, refs = [], tag = null }) {
@@ -317,7 +365,7 @@ function negativePrompt(textMode) {
 }
 
 export {
-  SYSTEM, FONTS, FONT_NAMES,
+  SYSTEM, FONTS, FONT_NAMES, ASSET_KINDS, labelAssetsPrompt, elementPrompt,
   analyzePrompt, synthesizePrompt, conceptsPrompt, learnPrompt, pickExamples,
   normalizeDA, normalizeConcepts, buildImagePrompt, buildEditPrompt, negativePrompt, plainText,
 };

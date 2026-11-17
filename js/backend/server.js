@@ -53,6 +53,14 @@ function activeFolder() {
 function folderFor(b) {
   return folderById(b?.folderId) || activeFolder();
 }
+const folderAssets = (f) => db().assets.filter((a) => a.folderId === f.id);
+// Banque d'images codée A1, A2… pour l'IA (les ★ d'abord).
+function codedAssets(f) {
+  return folderAssets(f)
+    .sort((a, b) => (b.pinned - a.pinned) || (a.addedAt || '').localeCompare(b.addedAt || ''))
+    .slice(0, 40)
+    .map((a, i) => ({ code: `A${i + 1}`, id: a.id, name: a.name, kind: a.kind, note: a.note, pinned: !!a.pinned }));
+}
 
 function publicState() {
   const d = db();
@@ -60,8 +68,9 @@ function publicState() {
   return {
     channel: d.channel,
     folders: d.folders.map((x) => ({
-      id: x.id, name: x.name, description: x.description, hasDA: !!x.da,
+      id: x.id, name: x.name, description: x.description, hasDA: !!x.da, useFace: x.useFace !== false,
       refs: d.refs.filter((r) => r.folderId === x.id).length,
+      assets: d.assets.filter((a) => a.folderId === x.id).length,
       generations: d.generations.filter((g) => g.folderId === x.id).length,
     })),
     activeFolder: f.id,
@@ -69,6 +78,7 @@ function publicState() {
     daVersion: f.daVersion || 0,
     daHistory: (f.daHistory || []).map(({ version, at, reason, changelog }) => ({ version, at, reason, changelog })),
     refs: learn.folderRefs(f),
+    assets: folderAssets(f),
     faces: d.faces,
     generations: learn.folderGens(f),
     stats: { ...d.stats, ...f.stats },
@@ -110,17 +120,27 @@ function normConcept(c = {}) {
     emotion: str(c.emotion, 60),
     scene: str(c.scene, 400),
     imagePrompt: str(c.imagePrompt, 1500),
+    assetIds: (Array.isArray(c.assetIds) ? c.assetIds : []).filter((x) => typeof x === 'string').slice(0, 4),
   };
 }
 
-async function gatherRefs(useFace, folder) {
+async function gatherRefs(useFace, folder, assetIds = []) {
   const d = db();
   const out = [];
+  // Éléments de la banque d'images choisis pour cette miniature (les ★ toujours inclus)
+  const chosen = [...new Set([...folderAssets(folder).filter((a) => a.pinned).map((a) => a.id), ...assetIds])].slice(0, 4);
+  const assetRefs = [];
+  for (const id of chosen) {
+    const a = d.assets.find((x) => x.id === id && x.folderId === folder.id);
+    if (!a) continue;
+    try { assetRefs.push({ role: 'asset', name: a.name, kind: a.kind, label: a.name, assetId: a.id, ...(await store.readImage('assets', a.file)) }); } catch (_) { /* fichier manquant */ }
+  }
   if (useFace) {
     for (const f of d.faces.slice(0, 2)) {
       try { out.push({ role: 'face', label: 'photo of the YouTuber', ...(await store.readImage('faces', f.file)) }); } catch (_) { /* fichier manquant */ }
     }
   }
+  out.push(...assetRefs);
   const maxStyle = clamp(store.config.image.maxRefs, 0, 4);
   if (maxStyle > 0) {
     const ordered = learn.folderRefs(folder).sort((a, b) => (b.pinned - a.pinned)
@@ -167,6 +187,7 @@ route('PATCH', '/api/folders/:id', async (b, { id }) => {
     f.name = name;
   }
   if (typeof b.description === 'string') f.description = str(b.description, 400);
+  if (typeof b.useFace === 'boolean') f.useFace = b.useFace;
   store.saveDb();
   return { ok: true };
 });
@@ -186,6 +207,8 @@ route('DELETE', '/api/folders/:id', async (b, { id }) => {
   if (learn.status.running && learn.status.folderId === id) throw httpError(409, 'Ce dossier est en train d\'apprendre, réessaie dans un instant.');
   for (const r of learn.folderRefs(f)) { await store.removeFile('refs', r.file); if (r.thumb) await store.removeFile('thumbs', r.thumb); }
   for (const g of learn.folderGens(f)) { await store.removeFile('gens', g.file); if (g.thumb) await store.removeFile('thumbs', g.thumb); if (g.exportFile) await store.removeFile('exports', g.exportFile); }
+  for (const a of folderAssets(f)) { await store.removeFile('assets', a.file); if (a.thumb) await store.removeFile('thumbs', a.thumb); }
+  d.assets = d.assets.filter((a) => a.folderId !== id);
   d.refs = d.refs.filter((r) => r.folderId !== id);
   d.generations = d.generations.filter((g) => g.folderId !== id);
   d.folders = d.folders.filter((x) => x.id !== id);
@@ -289,6 +312,117 @@ route('DELETE', '/api/refs/:id', async (b, { id }) => {
 
 route('POST', '/api/youtube', async (b) => youtube.importLinks(str(b.links, 20000)));
 
+// --- Banque d'images (personnages, véhicules, logos, lieux…) ---
+route('POST', '/api/assets', async (b) => {
+  const folder = folderFor(b);
+  const img = parseDataUrl(b.dataUrl);
+  const th = b.thumbDataUrl ? parseDataUrl(b.thumbDataUrl) : null;
+  const asset = {
+    id: uid('a'),
+    folderId: folder.id,
+    file: await store.saveImage('assets', img.blob, img.mime, 'a'),
+    thumb: th ? await store.saveImage('thumbs', th.blob, th.mime, 'at') : null,
+    name: str(b.name, 60) || 'Élément',
+    kind: P.ASSET_KINDS[b.kind] ? b.kind : 'other',
+    note: str(b.note, 200),
+    pinned: false,
+    renamed: false,
+    labeled: false,
+    addedAt: now(),
+  };
+  db().assets.push(asset);
+  store.saveDb();
+  return { asset };
+});
+
+route('PATCH', '/api/assets/:id', async (b, { id }) => {
+  const a = db().assets.find((x) => x.id === id);
+  if (!a) throw httpError(404, 'Élément introuvable.');
+  if (typeof b.name === 'string' && str(b.name, 60)) { a.name = str(b.name, 60); a.renamed = true; }
+  if (P.ASSET_KINDS[b.kind]) a.kind = b.kind;
+  if (typeof b.note === 'string') a.note = str(b.note, 200);
+  if (typeof b.pinned === 'boolean') a.pinned = b.pinned;
+  store.saveDb();
+  return { asset: a };
+});
+
+route('DELETE', '/api/assets/:id', async (b, { id }) => {
+  const d = db();
+  const a = d.assets.find((x) => x.id === id);
+  if (!a) throw httpError(404, 'Élément introuvable.');
+  d.assets = d.assets.filter((x) => x.id !== id);
+  await store.removeFile('assets', a.file);
+  if (a.thumb) await store.removeFile('thumbs', a.thumb);
+  store.saveDb();
+  return { ok: true };
+});
+
+route('POST', '/api/assets/:id/thumb', async (b, { id }) => {
+  const a = db().assets.find((x) => x.id === id);
+  if (!a) throw httpError(404, 'Élément introuvable.');
+  const img = parseDataUrl(b.dataUrl);
+  const old = a.thumb;
+  a.thumb = await store.saveImage('thumbs', img.blob, img.mime, 'at');
+  if (old) await store.removeFile('thumbs', old);
+  store.saveDb();
+  return { thumb: a.thumb };
+});
+
+// L'IA regarde les images ajoutées et leur donne un nom, un type et une description.
+route('POST', '/api/assets/label', async (b) => {
+  const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 30);
+  const list = db().assets.filter((a) => ids.includes(a.id));
+  if (!list.length || store.config.brain.provider === 'demo') return { assets: list };
+  const folder = folderById(list[0].folderId) || activeFolder();
+  for (let i = 0; i < list.length; i += 6) {
+    const batch = list.slice(i, i + 6);
+    const images = await Promise.all(batch.map(async (a) => ({ ...(await store.readImage(a.thumb ? 'thumbs' : 'assets', a.thumb || a.file)), label: 'élément de la banque' })));
+    const res = await providers.brainJson({ system: P.SYSTEM, user: P.labelAssetsPrompt(batch.length, learn.channelFor(folder)), images, temperature: 0.2 });
+    const arr = Array.isArray(res?.assets) ? res.assets : [];
+    batch.forEach((a, k) => {
+      const r = arr.find((x) => Number(x?.image) === k + 1) || arr[k];
+      if (!r || typeof r !== 'object') return;
+      if (!a.renamed && str(r.name, 60)) a.name = str(r.name, 60);
+      if (P.ASSET_KINDS[r.kind]) a.kind = r.kind;
+      if (str(r.note, 200)) a.note = str(r.note, 200);
+      a.labeled = true;
+    });
+    store.saveDb();
+  }
+  return { assets: list };
+});
+
+// Gemini crée un élément (ex : « une Lamborghini dorée ») et le range dans la banque.
+route('POST', '/api/assets/create', async (b) => {
+  const folder = folderFor(b);
+  const description = str(b.description, 300);
+  if (!description) throw httpError(400, 'Décris l\'élément à créer (ex : « une Lamborghini dorée vue de 3/4 »).');
+  const out = await providers.makeImage({
+    buildPrompt: () => P.elementPrompt({ description, da: folder.da }),
+    refs: [],
+    aspect: '1:1',
+    demoHint: { seedText: description, palette: (folder.da?.palette || []).map((p) => p.hex) },
+  });
+  const asset = {
+    id: uid('a'),
+    folderId: folder.id,
+    file: await store.saveImage('assets', out.blob, out.mime, 'a'),
+    thumb: null,
+    name: description.slice(0, 60),
+    kind: 'object',
+    note: description,
+    pinned: false,
+    renamed: false,
+    labeled: false,
+    generated: true,
+    addedAt: now(),
+  };
+  db().assets.push(asset);
+  store.addUsage(out.costUsd || 0);
+  store.saveDb();
+  return { asset };
+});
+
 // --- Photos du créateur ---
 route('POST', '/api/faces', async (b) => {
   const img = parseDataUrl(b.dataUrl);
@@ -348,18 +482,26 @@ route('POST', '/api/concepts', async (b) => {
   const d = db();
   const folder = folderFor(b);
   const hasFace = input.useFace && d.faces.length > 0;
+  const assets = codedAssets(folder);
   let concepts;
   if (store.config.brain.provider === 'demo') {
-    concepts = demo.concepts(input, folder.da, input.count);
+    concepts = demo.concepts(input, folder.da, input.count, assets);
   } else {
     const res = await providers.brainJson({
       system: P.SYSTEM,
-      user: P.conceptsPrompt({ input, da: folder.da, channel: learn.channelFor(folder), examples: P.pickExamples(learn.folderGens(folder)), hasFace, count: input.count }),
+      user: P.conceptsPrompt({ input, da: folder.da, channel: learn.channelFor(folder), examples: P.pickExamples(learn.folderGens(folder)), hasFace, count: input.count, assets }),
       temperature: 0.95,
     });
     concepts = P.normalizeConcepts(res, input.count, input);
   }
-  return { concepts: concepts.map((c) => normConcept({ ...c, id: uid('c') })) };
+  const pinned = assets.filter((a) => a.pinned).map((a) => a.id);
+  return {
+    concepts: concepts.map((c) => normConcept({
+      ...c,
+      id: uid('c'),
+      assetIds: [...new Set([...pinned, ...(c.assets || []).map((code) => assets.find((a) => a.code === code)?.id).filter(Boolean)])],
+    })),
+  };
 });
 
 route('POST', '/api/generate', async (b) => {
@@ -367,7 +509,7 @@ route('POST', '/api/generate', async (b) => {
   const concept = normConcept(b.concept);
   const d = db();
   const folder = folderFor(b);
-  const refs = await gatherRefs(input.useFace && d.faces.length > 0, folder);
+  const refs = await gatherRefs(input.useFace && d.faces.length > 0, folder, concept.assetIds);
   const out = await providers.makeImage({
     buildPrompt: (used, tag) => P.buildImagePrompt({ concept, da: folder.da, textMode: input.textMode, refs: used, tag }),
     refs,
@@ -386,6 +528,7 @@ route('POST', '/api/generate', async (b) => {
     costUsd: out.costUsd || 0,
     prompt: out.prompt,
     usedRefs: out.usedRefs || 0,
+    assetNames: refs.filter((r) => r.role === 'asset').map((r) => r.name),
     rating: 0,
     comment: '',
     final: false,
@@ -536,10 +679,11 @@ route('GET', '/api/backup', async () => {
   const wanted = new Set([
     ...d.refs.flatMap((r) => [`refs/${r.file}`, r.thumb ? `thumbs/${r.thumb}` : null]),
     ...d.faces.flatMap((f) => [`faces/${f.file}`, f.thumb ? `thumbs/${f.thumb}` : null]),
+    ...d.assets.flatMap((a) => [`assets/${a.file}`, a.thumb ? `thumbs/${a.thumb}` : null]),
     ...finals.map((g) => `exports/${g.exportFile}`),
   ].filter(Boolean));
   const files = {};
-  for (const [key, blob] of await store.listFiles(['refs/', 'faces/', 'thumbs/', 'exports/'])) {
+  for (const [key, blob] of await store.listFiles(['refs/', 'faces/', 'thumbs/', 'exports/', 'assets/'])) {
     if (wanted.has(key)) files[key] = await blobToDataUrl(blob);
   }
   const { keys, ...configWithoutKeys } = store.config;

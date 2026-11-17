@@ -240,7 +240,7 @@ export function estimateCost(provider, model, nInputs) {
 
 function maxInputImages(provider, model) {
   if (provider === 'xai') return /image-2|2\.0/.test(model) ? 5 : 1;
-  if (provider === 'gemini' || provider === 'vertex') return /lite/.test(model) ? 3 : 6;
+  if (provider === 'gemini' || provider === 'vertex') return /lite/.test(model) ? 3 : 7;
   if (provider === 'openai') return 6;
   return 0;
 }
@@ -256,13 +256,13 @@ async function finish(blob) {
   return { blob: blob.type === mime ? blob : new Blob([blob], { type: mime }), mime };
 }
 
-async function xaiImage({ model, buildPrompt, refs }) {
+async function xaiImage({ model, buildPrompt, refs, aspect = '16:9' }) {
   const key = requireKey('xai');
   const base = PROVIDERS.xai.url();
   const c = cfg().image;
   const headers = { Authorization: `Bearer ${key}` };
   const tag = (i) => `<IMAGE_${i}>`;
-  const common = { model, n: 1, response_format: 'b64_json', aspect_ratio: '16:9', resolution: c.resolution === '2k' ? '2k' : '1k' };
+  const common = { model, n: 1, response_format: 'b64_json', aspect_ratio: aspect, resolution: c.resolution === '2k' ? '2k' : '1k' };
   if (/image-2|2\.0/.test(model) && ['low', 'medium'].includes(c.quality)) common.quality = c.quality;
   const toRef = async (r) => ({ url: await dataUrlOf(r), type: 'image_url' });
   const numbered = (list) => list.map((r, index) => ({ ...r, index }));
@@ -289,7 +289,7 @@ async function xaiImage({ model, buildPrompt, refs }) {
   return { ...out, costUsd, prompt: buildPrompt(used, used.length ? tag : null), usedRefs: used.length };
 }
 
-async function geminiImage({ provider = 'gemini', model, buildPrompt, refs }) {
+async function geminiImage({ provider = 'gemini', model, buildPrompt, refs, aspect = '16:9' }) {
   const c = cfg().image;
   const tag = (i) => `reference image ${i + 1}`;
   const used = refs.map((r, index) => ({ ...r, index }));
@@ -300,7 +300,7 @@ async function geminiImage({ provider = 'gemini', model, buildPrompt, refs }) {
     parts.push({ inlineData: { mimeType: r.mime, data: await blobToBase64(r.blob) } });
   }
   parts.push({ text: prompt });
-  const imageConfig = { aspectRatio: '16:9' };
+  const imageConfig = { aspectRatio: aspect };
   const wants2k = c.resolution === '2k' && !/2\.5/.test(model);
   if (wants2k) imageConfig.imageSize = '2K';
   const body = { contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig } };
@@ -324,7 +324,7 @@ async function geminiImage({ provider = 'gemini', model, buildPrompt, refs }) {
   return { ...out, costUsd: estimateCost(provider, model, used.length), prompt, usedRefs: used.length };
 }
 
-async function openaiImage({ model, buildPrompt, refs }) {
+async function openaiImage({ model, buildPrompt, refs, aspect = '16:9' }) {
   const key = requireKey('openai');
   const base = PROVIDERS.openai.url();
   const c = cfg().image;
@@ -333,14 +333,15 @@ async function openaiImage({ model, buildPrompt, refs }) {
   const used = refs.map((r, index) => ({ ...r, index }));
   const prompt = buildPrompt(used, used.length ? tag : null);
   const quality = ['low', 'medium', 'high'].includes(c.quality) ? c.quality : undefined;
+  const size = aspect === '1:1' ? '1024x1024' : '1536x1024';
   let j;
   if (!used.length) {
-    j = await request(`${base}/images/generations`, { headers, body: { model, prompt, size: '1536x1024', n: 1, ...(quality ? { quality } : {}) } });
+    j = await request(`${base}/images/generations`, { headers, body: { model, prompt, size, n: 1, ...(quality ? { quality } : {}) } });
   } else {
     const fd = new FormData();
     fd.append('model', model);
     fd.append('prompt', prompt);
-    fd.append('size', '1536x1024');
+    fd.append('size', size);
     fd.append('n', '1');
     if (quality) fd.append('quality', quality);
     used.forEach((r, i) => fd.append('image[]', r.blob, `reference-${i + 1}.${r.mime === 'image/png' ? 'png' : 'jpg'}`));
@@ -354,21 +355,21 @@ async function openaiImage({ model, buildPrompt, refs }) {
  * Crée une image. refs = [{role:'face'|'style'|'source', blob, mime, label}] (par ordre d'importance)
  * buildPrompt(refsUtilisées, tag) → texte du prompt.
  */
-export async function makeImage({ buildPrompt, refs = [], demoHint = {} }) {
+export async function makeImage({ buildPrompt, refs = [], demoHint = {}, aspect = '16:9' }) {
   const provider = cfg().image.provider;
   const label = PROVIDERS[provider]?.label || provider;
   try {
     let model = await resolveModel('image');
     const usable = refs.slice(0, maxInputImages(provider, model));
     let out;
-    if (provider === 'xai') out = await xaiImage({ model, buildPrompt, refs: usable });
+    if (provider === 'xai') out = await xaiImage({ model, buildPrompt, refs: usable, aspect });
     else if (provider === 'gemini' || provider === 'vertex') {
-      const r = await withModelFallback('image', provider, model, (m) => geminiImage({ provider, model: m, buildPrompt, refs: usable }));
+      const r = await withModelFallback('image', provider, model, (m) => geminiImage({ provider, model: m, buildPrompt, refs: usable, aspect }));
       out = r.out;
       model = r.model;
-    } else if (provider === 'openai') out = await openaiImage({ model, buildPrompt, refs: usable });
+    } else if (provider === 'openai') out = await openaiImage({ model, buildPrompt, refs: usable, aspect });
     else {
-      const blob = await demo.makeImage(demoHint);
+      const blob = await demo.makeImage(aspect === '1:1' ? { ...demoHint, width: 720, height: 720, subjectPosition: 'center' } : demoHint);
       out = { blob, mime: 'image/png', costUsd: 0, prompt: buildPrompt([], null), usedRefs: 0 };
     }
     return { ...out, provider, model: model || provider };

@@ -3,7 +3,7 @@ import { uid, MIME_EXT, sniffBlob } from './util.js';
 
 const DB_NAME = 'miniastudio';
 export const DATA_DIR = 'ce navigateur (sur cet appareil)';
-export const DIRS = ['refs', 'faces', 'gens', 'thumbs', 'exports'];
+export const DIRS = ['refs', 'faces', 'gens', 'thumbs', 'exports', 'assets'];
 
 export const DEFAULT_CONFIG = {
   keys: { vertex: '', gemini: '', xai: '', groq: '', openai: '', custom: '' },
@@ -20,6 +20,7 @@ export const DEFAULT_DB = {
   folders: [],
   activeFolder: null,
   refs: [],
+  assets: [],
   faces: [],
   generations: [],
   stats: { imagesGenerated: 0, costUsd: 0, monthly: {} },
@@ -35,6 +36,7 @@ export function newFolder(name, description = '', from = null) {
     daVersion: from?.da ? 1 : 0,
     daHistory: from?.da ? [{ version: 1, at: new Date().toISOString(), reason: `Copiée depuis « ${from.name} »`, changelog: [], da: JSON.parse(JSON.stringify(from.da)) }] : [],
     stats: { feedbackSinceLearn: 0, totalFeedback: 0, lastLearnAt: null },
+    useFace: true,
   };
 }
 
@@ -57,7 +59,9 @@ export function migrate(d) {
   delete d.daVersion;
   delete d.daHistory;
   if (d.stats) { delete d.stats.feedbackSinceLearn; delete d.stats.totalFeedback; delete d.stats.lastLearnAt; }
+  if (!Array.isArray(d.assets)) d.assets = [];
   for (const f of d.folders) {
+    if (typeof f.useFace !== 'boolean') f.useFace = true;
     f.daHistory = Array.isArray(f.daHistory) ? f.daHistory : [];
     f.stats = { feedbackSinceLearn: 0, totalFeedback: 0, lastLearnAt: null, ...(f.stats || {}) };
   }
@@ -65,6 +69,7 @@ export function migrate(d) {
   const first = d.folders[0].id;
   for (const r of d.refs || []) if (!ids.has(r.folderId)) r.folderId = first;
   for (const g of d.generations || []) if (!ids.has(g.folderId)) g.folderId = first;
+  d.assets = d.assets.filter((a) => ids.has(a.folderId));
   if (!ids.has(d.activeFolder)) d.activeFolder = first;
   d.schema = 2;
   return d;
